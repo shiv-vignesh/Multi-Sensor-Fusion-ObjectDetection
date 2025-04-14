@@ -19,26 +19,29 @@
             "labels_dir":"data/KiTTi/validation/label_2",
             "shuffle":false,
             "apply_augmentation":false, 
-            "batch_size":12          
+            "batch_size":12            
         }, 
-        "image_resize":[640, 640], 
-        "perform_validation":false
-    }, 
+        "image_resize":[608, 608], 
+        "perform_validation":false, 
+        "lidar_map_type":"bev_map"
+    },
     "model_kwargs":{
-        "model_type":"mlsf_yolov8",
+        "model_type":"mlsf_yolov3",
         "mlsf_yolo_kwargs":{
-            "cfg_file":"config/yolov3-yolo_reduced_classes.cfg",
+            "image_cfg_file":"config/yolov3-kitti-608.cfg",
+            "lidar_cfg_file":"config/yolov3-yolo_reduced_classes_3D.cfg",
             "yolov8_weights_path":"yolov8l.pt",
             "image_channels":3, 
             "lidar_channels":3, 
-            "image_backbone_device":"cuda:16",
-            "lidar_backbone_device":"cuda:17",
-            "adaptive_fusion_device":"cuda:19",
+            "image_backbone_device":"cuda:15",
+            "lidar_backbone_device":"cuda:16",
+            "adaptive_fusion_device":"cuda:18",
             "model_seed":101,
             "apply_adaptive_fusion":true, 
             "fusion_type":"attention",
             "num_fusion_blocks":2, 
-            "weighted_fusion":false
+            "weighted_fusion":false,
+            "task_type":["obj_2d"]
         },
         "mlsf_ssd_kwargs":{
             "cfg_file":"config/mobilenetv2.cfg",
@@ -47,20 +50,20 @@
             "image_resize":[375, 1242], 
             "feature_map_size":[60, 20], 
             "detection_depths":["InvertedResidual_6", "InvertedResidual_12", "InvertedResidual_15"],
-            "image_backbone_device":"cuda:14",
-            "lidar_backbone_device":"cuda:15",
-            "adaptive_fusion_device":"cuda:16",
+            "image_backbone_device":"cuda:15",
+            "lidar_backbone_device":"cuda:16",
+            "adaptive_fusion_device":"cuda:18",
             "model_seed":101,
-            "apply_adaptive_fusion":false,
-            "use_lidar_backbone":false
+            "apply_adaptive_fusion":true,
+            "use_lidar_backbone":true
         }
     },
     "optimizer_kwargs":{
         "_description": "default_lr is for any layer other than lm",
         "_type": "AdamW", 
-        "image_backbone_lr":3e-3, 
-        "lidar_backbone_lr":3e-3,
-        "adaptive_fusion_lr":3e-3,
+        "image_backbone_lr":3e-5, 
+        "lidar_backbone_lr":3e-5,
+        "adaptive_fusion_lr":3e-5,
         "ssd_head_lr":5e-3,
         "momentum":0.9,
         "weight_decay":0.9, 
@@ -76,10 +79,9 @@
         "cosine_annealing_lr_kwargs":{
             "eta_min":1e-5
         }
-
     },
     "trainer_kwargs":{
-        "output_dir": "MLSF-YOLOv8-large-Attention",
+        "output_dir": "MLSF-YOLOv3-608-BEV",
         "is_training":true,
         "first_val_epoch": 0,
         "metric_eval_mode": "strict",
