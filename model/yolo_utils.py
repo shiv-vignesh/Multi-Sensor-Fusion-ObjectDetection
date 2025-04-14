@@ -7,6 +7,8 @@ import time, math
 from tqdm import tqdm
 # import wandb
 
+from trainer.loss import rotated_bbox_iou_polygon
+
 # wandb.init(project="MLSF-Yolov8-Training") 
 
 def weights_init_normal(m):
@@ -52,6 +54,171 @@ def xywh2xyxy_np(x):
     y[..., 2] = x[..., 0] + x[..., 2] / 2
     y[..., 3] = x[..., 1] + x[..., 3] / 2
     return y
+
+def non_max_suppression_rotated_bbox(prediction, conf_thres=0.25, nms_thres=0.0, topk=100):
+    """
+    Efficient NMS for rotated bboxes (only filtering + topk).
+    
+    Returns: (bs, -1, 8) => (x, y, w, l, im, re, object_conf, class_idx)
+    """
+    batch_size = len(prediction)
+    device = prediction[0].device
+    processed = []
+
+    for image_pred in prediction:
+        if image_pred is None or image_pred.size(0) == 0:
+            processed.append(torch.zeros((0, 8), device=device))
+            continue
+
+        # Filter by object confidence threshold
+        image_pred = image_pred[image_pred[:, 6] >= conf_thres]
+        if not image_pred.size(0):
+            processed.append(torch.zeros((0, 8), device=device))
+            continue
+
+        # Compute score = obj_conf * max class score
+        class_scores, class_preds = image_pred[:, 7:].max(1)
+        score = image_pred[:, 6] * class_scores
+
+        # Sort by score (descending)
+        image_pred = image_pred[(-score).argsort()]
+        class_preds = class_preds[(-score).argsort()]
+
+        # Keep topk
+        top_n = min(topk, image_pred.size(0))
+        image_pred = image_pred[:top_n]
+        class_preds = class_preds[:top_n].unsqueeze(1)
+
+        # Final output format: (x, y, w, l, im, re, object_conf, class_idx)
+        output = torch.cat([image_pred[:, :7], class_preds.float()], dim=1)
+        processed.append(output)
+
+    # Pad to match batch shape
+    max_len = max(p.size(0) for p in processed)
+    padded = []
+    for p in processed:
+        pad_len = max_len - p.size(0)
+        if pad_len > 0:
+            pad = torch.zeros((pad_len, 8), device=device)
+            p = torch.cat([p, pad], dim=0)
+        padded.append(p.unsqueeze(0))
+
+    return torch.cat(padded, dim=0)  # shape: (bs, max_len, 8)
+
+
+def non_max_suppression_rotated_bbox_2(prediction, conf_thres=0.95, nms_thres=0.4):
+    output = [None for _ in range(len(prediction))]
+    for image_i, image_pred in enumerate(prediction):
+        image_pred = image_pred[image_pred[:, 6] >= conf_thres]
+        if not image_pred.size(0):
+            continue
+        score = image_pred[:, 6] * image_pred[:, 7:].max(1)[0]
+        image_pred = image_pred[(-score).argsort()]
+        class_confs, class_preds = image_pred[:, 7:].max(1, keepdim=True)
+        detections = torch.cat((image_pred[:, :7].float(), class_confs.float(), class_preds.float()), 1)
+        
+        print(detections.shape)
+        exit(1)
+
+        keep_boxes = []
+        while detections.size(0):
+            current_det = detections[0, :6]
+            current_label = detections[0, -1]
+            other_boxes = detections[:, :6]
+            other_labels = detections[:, -1]
+
+            # Compute overlap mask
+            ious = fast_rotated_iou(current_det, other_boxes)
+            large_overlap = torch.from_numpy((ious > nms_thres).astype('bool')).to(prediction.device)
+            label_match = current_label == other_labels
+
+            invalid = large_overlap & label_match
+            weights = detections[invalid, 6:7]
+            detections[0, :6] = (weights * detections[invalid, :6]).sum(0) / weights.sum()
+            keep_boxes.append(detections[0])
+            detections = detections[~invalid]
+
+        if keep_boxes:
+            output[image_i] = torch.stack(keep_boxes)
+
+    return output
+
+def fast_rotated_iou(box1, boxes):
+    """Compute IoU between one rotated box and many others using vectorized polygon math."""
+    import cv2
+
+    box1 = box1.cpu().numpy()
+    boxes = boxes.cpu().numpy()
+
+    x1, y1, w1, l1, im1, re1 = box1
+    angle1 = np.arctan2(im1, re1) * 180 / np.pi
+    rect1 = ((x1, y1), (w1, l1), angle1)
+    poly1 = cv2.boxPoints(rect1).astype(np.float32)
+
+    ious = []
+    for i in range(boxes.shape[0]):
+        x, y, w, l, im, re = boxes[i]
+        angle = np.arctan2(im, re) * 180 / np.pi
+        rect = ((x, y), (w, l), angle)
+        poly2 = cv2.boxPoints(rect).astype(np.float32)
+
+        # Use OpenCV for polygon intersection
+        int_pts = cv2.intersectConvexConvex(poly1, poly2)[1]
+        if int_pts is not None:
+            inter_area = cv2.contourArea(int_pts)
+            area1 = w1 * l1
+            area2 = w * l
+            union = area1 + area2 - inter_area
+            iou = inter_area / union
+        else:
+            iou = 0.0
+        ious.append(iou)
+
+    return np.array(ious)
+
+def get_batch_statistics_rotated_bbox(outputs, targets, iou_threshold):
+    """ Compute true positives, predicted scores and predicted labels per sample """
+    batch_metrics = []
+    for sample_i in range(len(outputs)):
+
+        if outputs[sample_i] is None:
+            continue
+
+        output = outputs[sample_i]
+        pred_boxes = output[:, :6]
+        pred_scores = output[:, 6].detach().cpu()
+        pred_labels = output[:, -1].detach().cpu()
+
+        true_positives = np.zeros(pred_boxes.shape[0])
+
+        annotations = targets[targets[:, 0] == sample_i][:, 1:]
+        target_labels = annotations[:, 0] if len(annotations) else []
+        
+        if len(annotations):
+            detected_boxes = []
+            target_boxes = annotations[:, 1:]
+
+            for pred_i, (pred_box, pred_label) in enumerate(zip(pred_boxes, pred_labels)):
+
+                # If targets are found break
+                if len(detected_boxes) == len(annotations):
+                    break
+
+                # Ignore if label is not one of the target labels
+                if pred_label not in target_labels:
+                    continue
+
+                ious = rotated_bbox_iou_polygon(pred_box, target_boxes)
+                iou, box_index = torch.from_numpy(ious).max(0)
+
+                if iou >= iou_threshold and box_index not in detected_boxes:
+                    true_positives[pred_i] = 1                    
+                    detected_boxes += [box_index]
+                # print(f'True Positive Detected {sample_i}: {len(detected_boxes)} {len(target_boxes)}')
+        
+        batch_metrics.append([true_positives, pred_scores, pred_labels])
+    
+    return batch_metrics
 
 def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=None):
     """Performs Non-Maximum Suppression (NMS) on inference results
@@ -265,7 +432,6 @@ def ap_per_class(tp, conf, pred_cls, target_cls):
             # Accumulate FPs and TPs
             fpc = (1 - tp[i]).cumsum()
             tpc = (tp[i]).cumsum()
-
             # Recall
             recall_curve = tpc / (n_gt + 1e-16)
             r.append(recall_curve[-1])
