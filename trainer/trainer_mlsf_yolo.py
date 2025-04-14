@@ -12,7 +12,7 @@ from dataset_utils.enums import Enums
 from model.mlsf_yolo import MLSFYolo
 from model.mlsf_yolov8 import MLSFYolov8
 from model.mlsf_utils import decode_boxes, compute_precision_recall_f1
-from model.yolo_utils import xywh2xyxy, non_max_suppression, get_batch_statistics, ap_per_class
+from model.yolo_utils import xywh2xyxy, non_max_suppression, get_batch_statistics, ap_per_class, non_max_suppression_rotated_bbox, get_batch_statistics_rotated_bbox
 from trainer.trainer_adaptive_fusion import AugmentImage
 
 class MLSFTrainerYolo:
@@ -232,14 +232,15 @@ class MLSFTrainerYolo:
 
         self.logger.log_line()
         self.logger.log_message(
-            f'Training: Max Epoch - {self.epochs}'
+            f'Training: Max Epoch - {self.epochs} -- Tasks: {self.mlsf.task_type}'
         )
         self.logger.log_new_line()
 
         self.total_training_time = 0.0
 
         self.cur_epoch = 0   
-        self.best_score = 0.0   
+        # self.best_score = 0.0
+        self.best_score = defaultdict(float)
 
         for epoch in range(1, self.epochs + 1):
             self.cur_epoch = epoch
@@ -271,37 +272,27 @@ class MLSFTrainerYolo:
         epoch_training_time = 0.0
         ten_percent_training_time = 0.0
         ten_percent_metric_per_grid = defaultdict(lambda:defaultdict(int))
-        
+
         train_iter = tqdm(self.train_dataloader, desc=f'Training Epoch: {self.cur_epoch}')
         for batch_idx, data_items in enumerate(train_iter):
-            step_begin_time = time.time()            
-                        
+            
+            step_begin_time = time.time()
+
             if self.modality_dropout and self.mlsf.use_lidar_backbone:
                 loss, loss_components = self.train_one_step_modality_drop(data_items)
             elif self.modality_corrupt and self.mlsf.use_lidar_backbone:
                 loss, loss_components = self.train_one_step_modality_corrupt(data_items)
             else:
-                #TODO, must be uniform return for 2D and 3D
                 loss, loss_components, outputs = self.train_one_step(data_items)                
-                for metrics in loss_components:
-                    grid_size = metrics['grid_size']
-                    ten_percent_metric_per_grid[grid_size]['precision'] += metrics['precision']
-                    ten_percent_metric_per_grid[grid_size]['cls_acc'] += metrics['cls_acc']
-                    ten_percent_metric_per_grid[grid_size]['recall50'] += metrics['recall50']
-                    ten_percent_metric_per_grid[grid_size]['recall75'] += metrics['recall75']
-                    # ten_percent_metric_per_grid[grid_size]['iou_scores'] += metrics['iou_scores']
-                    ten_percent_metric_per_grid[grid_size]['conf_obj'] += metrics['conf_obj']
-                    ten_percent_metric_per_grid[grid_size]['conf_noobj'] += metrics['conf_noobj']
 
             step_end_time = time.time()
-            
+
             if ((batch_idx + 1) % self.gradient_accumulation_steps == 0) or (batch_idx == self.train_dataloader.__len__() - 1):                
 
                 self.optimizer.step()
-                # self.lr_scheduler.step()
+                self.lr_scheduler.step()
 
                 self.optimizer.zero_grad()                                            
-
                 current_lr = self.optimizer.param_groups[0]['lr']                
 
             total_loss += loss.item()
@@ -318,19 +309,7 @@ class MLSFTrainerYolo:
                 self.logger.log_message(message=message)
                 self.logger.log_new_line()
                 
-                for grid_size in ten_percent_metric_per_grid:
-                    precision = ten_percent_metric_per_grid[grid_size]['precision']/self.total_train_batch
-                    cls_acc = ten_percent_metric_per_grid[grid_size]['cls_acc']/self.total_train_batch
-                    recall50 = ten_percent_metric_per_grid[grid_size]['recall50']/self.total_train_batch
-                    recall75 = ten_percent_metric_per_grid[grid_size]['recall75']/self.total_train_batch
-                    # iou_scores = ten_percent_metric_per_grid[grid_size]['iou_scores']/self.total_train_batch
-                    conf_obj = ten_percent_metric_per_grid[grid_size]['conf_obj']/self.total_train_batch
-                    conf_noobj = ten_percent_metric_per_grid[grid_size]['conf_noobj']/self.total_train_batch
-                
-                    metrics_log = f'GridSize: {grid_size} -- Cls Acc: {cls_acc:.4f} Precision: {precision:.4f} Recall50: {recall50:.4f} Recall75: {recall75:.4f} Conf Obj: {conf_obj:.4f} Conf NoObj: {conf_noobj:.4f}'
-                    self.logger.log_message(metrics_log)
-                    
-                self.logger.log_new_line()
+                self.log_task_metrics(loss_components)
 
                 ten_percent_batch_total_loss = 0
                 ten_percent_training_time = 0.0
@@ -499,8 +478,9 @@ class MLSFTrainerYolo:
         
         val_epoch_iter = tqdm(self.validation_dataloader, disable=True)   
 
-        labels = []
-        sample_metrics = []  # List of tuples (TP, confs, pred)
+        labels = defaultdict(list)
+        # sample_metrics = {}  # List of tuples (TP, confs, pred)
+        task_sample_metrics = defaultdict(list)
         
         if type(self.mlsf) == MLSFYolo:
             img_size = self.mlsf.image_backbone.hyperparams['height']
@@ -513,22 +493,41 @@ class MLSFTrainerYolo:
                 loss, loss_components, outputs = self.mlsf(
                     data_items['images'],
                     data_items['lidar_2d'] if self.mlsf.use_lidar_backbone else None,
-                    data_items['targets'], data_items['targets_3d']
-                )                
+                    data_items['targets'], data_items['targets_3d'], 
+                )
                         
             total_eval_loss += loss.item()
 
-            targets = data_items['targets'].cpu()
-            labels += targets[:, 1] #[class_id] 
-            
-            targets[:, 2:] = xywh2xyxy(targets[:, 2:])
-            targets[:, 2:] *= img_size
-
             if type(self.mlsf) == MLSFYolo:
-                #TODO, call respective activation based on task (2D or 3D)
-                anchor_grids = [yolo_layer.anchor_grid for yolo_layer in self.mlsf.image_backbone.yolo_layers]
-                outputs = apply_sigmoid_activation(outputs, data_items['images'].size(2), anchor_grids)                
-            
+                
+                for task_type in outputs:
+                    if task_type == 'obj_2d':
+
+                        targets = data_items['targets'].cpu()
+                        labels[task_type] += targets[:, 1] #[class_id] 
+
+                        targets[:, 2:] = xywh2xyxy(targets[:, 2:])
+                        targets[:, 2:] *= img_size                    
+
+                        anchor_grids = [yolo_layer.anchor_grid for yolo_layer in self.mlsf.image_backbone.yolo_layers]
+                        outputs[task_type] = apply_sigmoid_activation(outputs[task_type], data_items['images'].size(2), anchor_grids)
+                        outputs[task_type] = non_max_suppression(outputs[task_type])
+                        task_sample_metrics[task_type] += get_batch_statistics(
+                            outputs[task_type], targets, iou_threshold=0.5
+                        )
+
+                    elif 'obj_3d' in self.mlsf.task_type:
+                        targets = data_items['targets_3d']
+                        targets[:, 2:] *= img_size                        
+
+                        outputs[task_type] = torch.cat(outputs[task_type], 1)
+                        labels[task_type] += targets[:, 1] #[class_id] 
+
+                        outputs[task_type] = non_max_suppression_rotated_bbox(outputs[task_type], conf_thres=0.5, nms_thres=0.5)
+                        task_sample_metrics[task_type] += get_batch_statistics_rotated_bbox(outputs[task_type], 
+                                                                        targets.to(outputs[task_type].device), 
+                                                                        iou_threshold=0.5)                        
+
             elif type(self.mlsf) == MLSFYolov8:
                 ious = outputs['ious']
                 outputs = outputs['predictions']
@@ -543,39 +542,41 @@ class MLSFTrainerYolo:
                     anchor_grids = [yolo_layer.anchor_grid for yolo_layer in self.mlsf.detection_heads.values()]             
                     outputs = apply_sigmoid_activation(outputs, data_items['images'].size(2), anchor_grids)
 
-            outputs = non_max_suppression(outputs)
-            
-            sample_metrics += get_batch_statistics(outputs, targets, iou_threshold=0.5)
         
         self.logger.log_new_line()
         self.logger.log_message(f'Epoch {self.cur_epoch} - Evaluation Loss {total_eval_loss/len(self.validation_dataloader):.4f}')    
         self.logger.log_line()        
 
         # Concatenate sample statistics
-        true_positives, pred_scores, pred_labels = [
-            np.concatenate(x, 0) for x in list(zip(*sample_metrics))]            
-
-        metrics_output = ap_per_class(
-            true_positives, pred_scores, pred_labels, labels) 
         
-        table_string = self.print_eval_stats(metrics_output, list(Enums.KiTTi_label2Id.keys()), True)
-        _, _, AP, _, _ = metrics_output        
-        
-        if AP.mean() > (self.best_score + 0.02):
-            self.best_score = AP.mean()
-            ckpt_dir = f'{self.output_dir}/best-model'
-            if not os.path.exists(ckpt_dir):
-                os.makedirs(ckpt_dir)
+        for task_type, sample_metrics in task_sample_metrics.items():
+            
+            self.logger.log_message(f'  Computing Metrics for {task_type}   ')
 
-            torch.save(
-                self.mlsf.state_dict(), f'{ckpt_dir}/best-model.pt'
-            )
-            with open(f'{ckpt_dir}/best-model.txt','w+') as f:
-                f.write(table_string)
-            f.close()
+            true_positives, pred_scores, pred_labels = [
+                np.concatenate(x, 0) for x in list(zip(*sample_metrics))]            
 
-            self.logger.log_message(f'Saving Best Model at Performance - AP: {self.best_score}')
-            self.logger.log_line()
+            metrics_output = ap_per_class(
+                true_positives, pred_scores, pred_labels, labels[task_type]) 
+            
+            table_string = self.print_eval_stats(metrics_output, list(Enums.KiTTi_label2Id.keys()), True)
+            _, _, AP, _, _ = metrics_output        
+            
+            if AP.mean() > (self.best_score[task_type] + 0.02):
+                self.best_score[task_type] = AP.mean()
+                ckpt_dir = f'{self.output_dir}/best-model_{task_type}'
+                if not os.path.exists(ckpt_dir):
+                    os.makedirs(ckpt_dir)
+
+                torch.save(
+                    self.mlsf.state_dict(), f'{ckpt_dir}/best-model.pt'
+                )
+                with open(f'{ckpt_dir}/best-model.txt','w+') as f:
+                    f.write(table_string)
+                f.close()
+
+                self.logger.log_message(f'Saving {task_type} Best Model at Performance - AP: {self.best_score}')
+                self.logger.log_line()
             
     def print_eval_stats(self, metrics_output, class_names, verbose):
         
@@ -607,3 +608,30 @@ class MLSFTrainerYolo:
             self.logger.log_message("---- mAP not measured (no detections found by model) ----")
             
         return table_string
+    
+    def log_task_metrics(self, loss_components:dict):
+        
+        for task_type in self.mlsf.task_type:
+
+            self.logger.log_message(f'  Task: {task_type}   ')
+
+            if task_type == 'obj_3d':
+                for grid_size in loss_components[task_type]:
+                    precision = loss_components[task_type][grid_size]['precision']
+                    cls_acc = loss_components[task_type][grid_size]['cls_acc']
+                    recall50 = loss_components[task_type][grid_size]['recall50']
+                    recall75 = loss_components[task_type][grid_size]['recall75']
+                    # iou_scores = ten_percent_metric_per_grid[grid_size]['iou_scores']
+                    conf_obj = loss_components[task_type][grid_size]['conf_obj']
+                    conf_noobj = loss_components[task_type][grid_size]['conf_noobj']
+                
+                    metrics_log = f'GridSize: {grid_size} -- Cls Acc: {cls_acc:.4f} Precision: {precision:.4f} Recall50: {recall50:.4f} Recall75: {recall75:.4f} Conf Obj: {conf_obj:.4f} Conf NoObj: {conf_noobj:.4f}'
+                    self.logger.log_message(metrics_log)                                    
+                
+            elif task_type == 'obj_2d':
+                lbox, lcls, lobj = loss_components[task_type]['lbox'], loss_components[task_type]['lcls'], loss_components[task_type]['lobj']
+                self.logger.log_message(
+                    f'  Loss BBox: {lbox:.4f} -- Loss Cls: {lcls:.4f} -- Loss Obj: {lobj:.4f}'
+                )
+                
+            self.logger.log_new_line()
