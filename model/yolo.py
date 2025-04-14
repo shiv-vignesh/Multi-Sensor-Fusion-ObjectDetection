@@ -200,7 +200,7 @@ class YOLOLayer3D_2(nn.Module):
 class YOLOLayer3D(nn.Module):
     """Detection layer"""
 
-    def __init__(self, anchors, num_classes, img_dim=416):
+    def __init__(self, anchors, num_classes, img_dim=None):
         super(YOLOLayer3D, self).__init__()
         self.anchors = anchors
         self.num_anchors = len(anchors)
@@ -276,7 +276,7 @@ class YOLOLayer3D(nn.Module):
         )
 
         if targets is None:
-            return output, 0
+            return output, 0, self.metrics
         else:
             iou_scores, class_mask, obj_mask, noobj_mask, tx, ty, tw, th, tim, tre, tcls, tconf = build_targets_3d(
                 pred_boxes=pred_boxes,
@@ -299,6 +299,8 @@ class YOLOLayer3D(nn.Module):
             loss_conf = self.obj_scale * loss_conf_obj + self.noobj_scale * loss_conf_noobj
             loss_cls = self.bce_loss(pred_cls[obj_mask], tcls[obj_mask])
             total_loss = loss_x + loss_y + loss_w + loss_h + loss_eular + loss_conf + loss_cls
+            
+            loss_box = loss_x + loss_y + loss_w + loss_h + loss_eular
 
             # Metrics
             cls_acc = 100 * class_mask[obj_mask].mean()
@@ -332,6 +334,7 @@ class YOLOLayer3D(nn.Module):
                 "conf_obj": to_cpu(conf_obj).item(),
                 "conf_noobj": to_cpu(conf_noobj).item(),
                 "grid_size": grid_size,
+                "loss_box": loss_box
             }
 
             return output, total_loss, self.metrics
@@ -407,10 +410,10 @@ class Darknet(nn.Module):
 
         self.seen = 0
         self.header_info = np.array([0, 0, 0, self.seen, 0], dtype=np.int32)
-        
+
         self.has_3d_head = False
         self.identify_detection_head_indices()
-        
+
     def identify_detection_head_indices(self):                
         
         ''' 
@@ -510,19 +513,29 @@ class Darknet(nn.Module):
 
         
         total_loss = torch.zeros(1, device=grid_features[0].device)
-        metrics_all = []
+        cls_loss = torch.zeros(1, device=grid_features[0].device)
+        bbox_loss = torch.zeros(1, device=grid_features[0].device)
+        conf_loss = torch.zeros(1, device=grid_features[0].device)
+        
+        metrics_all = {}
         
         for idx, (prev_conv_idx, det_head_idx) in enumerate(self.detection_head_indices):
             
             grid_features[idx] = self.module_list[prev_conv_idx](grid_features[idx])
             output, loss, metrics = self.module_list[det_head_idx][0](grid_features[idx], 
-                                                                image_size, targets)            
+                                                                image_size, targets)
+            grid_size = self.module_list[det_head_idx][0].grid_size
             grid_features[idx] = output
-            total_loss += loss
-            metrics_all.append(metrics)            
             
-        return grid_features, total_loss, metrics_all
-    
+            total_loss += loss
+            cls_loss += metrics['cls']
+            bbox_loss += metrics['loss_box']
+            conf_loss += metrics['conf']
+            
+            metrics_all[grid_size] = metrics
+
+        return grid_features, total_loss, metrics_all, cls_loss, bbox_loss, conf_loss
+
     def load_darknet_weights(self, weights_path):
         """Parses and loads the weights stored in 'weights_path'"""
 
