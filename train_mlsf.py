@@ -8,20 +8,24 @@ from model.mlsf_mobilenet import MLSF
 from trainer.trainer_mlsf_yolo import MLSFTrainerYolo
 from trainer.trainer_mlsf_ssd import MLSFTrainerSSD
 
-def load_torch_mismatch_weights(model:MLSFYolo, pth_file:str):
+def load_torch_mismatch_weights(model:MLSFYolo, pth_file:str, strict_loading:bool=True):
     
     weights_dict = torch.load(pth_file, map_location='cpu')        
     model_dict = model.state_dict()
-    
+        
     for idx, (model_layer, weight_layer) in enumerate(zip(model_dict, weights_dict)):
 
         layer_shape = model_dict[model_layer].shape
         weight_shape = weights_dict[weight_layer].shape
         
         if layer_shape == weight_shape:
+            print(f'Match at {model_layer}: Weights Shape: {weight_shape} - Layer Shape: {layer_shape}')
             model_dict[model_layer] = weights_dict[weight_layer]
             
         else:
+            if strict_loading:
+                exit(1)
+                
             print(f'Mismatch at {model_layer}: Weights Shape: {weight_shape} - Layer Shape: {layer_shape}')
             if 'weight' in model_layer:
                 model_dict[model_layer] = torch.nn.init.normal_(
@@ -32,6 +36,7 @@ def load_torch_mismatch_weights(model:MLSFYolo, pth_file:str):
                 model_dict[model_layer] = torch.nn.init.constant_(
                     model_dict[model_layer], 0.0
                 )
+            
             
     return model.load_state_dict(model_dict)
 
@@ -50,40 +55,48 @@ def create_mlsf_yolo(model_kwargs:dict, model_type:str, weights_path:str=None, i
 
     if model_type == "mlsf_yolov3":    
         mlsf = MLSFYolo(
-            config_path=model_kwargs['cfg_file'], 
+            image_config_path=model_kwargs['image_cfg_file'], 
+            lidar_config_path=model_kwargs['lidar_cfg_file'], 
             image_backbone_device=image_backbone_device, 
             lidar_backbone_device=lidar_backbone_device,
             adaptive_fusion_device=adaptive_fusion_device, 
             apply_adaptive_fusion=model_kwargs['apply_adaptive_fusion'], 
             num_fusion_blocks=model_kwargs['num_fusion_blocks'], 
             fusion_type=model_kwargs['fusion_type'], 
-            weighted_fusion=model_kwargs['weighted_fusion']
-        )
-
+            weighted_fusion=model_kwargs['weighted_fusion'],
+            task_type=model_kwargs['task_type']
+        )        
+        
         if weights_path:
-            if weights_path.endswith(".pt"):
-                # Load checkpoint weights
-                
+            if weights_path.endswith(".pt") or weights_path.endswith(".pth"):
+                # Load checkpoint weights                
                 mlsf.to(
                     torch.device('cpu')
                 )
-                try:                
+
+                try:
                     mlsf.load_state_dict(
                         torch.load(weights_path)
                     )
-                except:
-                    print(f'Loading with Mismatch')
-                    load_torch_mismatch_weights(mlsf.cpu(), weights_path)
-                    print(f'Done Loading')    
                     
-                    exit(1)
+                except:
+                    
+                    print(f'Loading with Mismatch for MLSF Image Backbone: {mlsf.image_backbone.__class__.__name__}')
+                    load_torch_mismatch_weights(mlsf.image_backbone.cpu(), weights_path, strict_loading=False)
+                    print(f'Loading with Mismatch for MLSF LiDAR Backbone: {mlsf.lidar_backbone.__class__.__name__}')
+                    load_torch_mismatch_weights(mlsf.lidar_backbone.cpu(), weights_path, strict_loading=False)
+                    print(f'Done Loading')
+                    
                 
                 mlsf.image_backbone.to(mlsf.image_backbone_device)
                 mlsf.lidar_backbone.to(mlsf.lidar_backbone_device)
-                mlsf.adaptive_fusion_module.to(mlsf.adaptive_fusion_device)
+                
+                if mlsf.apply_adaptive_fusion:
+                    mlsf.adaptive_fusion_module.to(mlsf.adaptive_fusion_device)
 
             else:
                 # Load darknet weights
+                print(f'Loading Darknet weights')
                 mlsf.image_backbone.load_darknet_weights(weights_path)    
                 if mlsf.use_lidar_backbone:
                     mlsf.lidar_backbone.load_darknet_weights(weights_path)
@@ -111,6 +124,7 @@ def create_mlsf_yolo(model_kwargs:dict, model_type:str, weights_path:str=None, i
                 mlsf.to(
                     torch.device('cpu')
                 )
+                
                 try:                
                     mlsf.load_state_dict(
                         torch.load(weights_path)
@@ -190,7 +204,11 @@ if __name__ == "__main__":
     if trainer_config['model_kwargs']['model_type'] == 'mlsf_yolov3' or trainer_config['model_kwargs']['model_type'] == 'mlsf_yolov8':   
         darknet53_path = 'darknet53.conv.74'
         # model_path = 'MLSF-YOLOv8-nano-Attention/ckpt_2/ckpt-model.pt'
-        model_path = ''
+        # model_path = 'MLSF-YOLOv3-3D-Bev-(LiDARBackbone-only)-3/ckpt_14/ckpt-model.pt'
+        # model_path = 'results/MLSF-YOLO-Attention-FocalLoss/best-model/best-model.pt'
+        model_path = "MLSF-YOLOv3-JointTraining/best-model_obj_2d/best-model.pt"
+        
+        # model_path = 'yolov3_ckpt_epoch-298.pth'
 
         mlsf = create_mlsf_yolo(
             trainer_config['model_kwargs']['mlsf_yolo_kwargs'], 
