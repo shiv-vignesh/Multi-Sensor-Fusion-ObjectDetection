@@ -1493,7 +1493,8 @@ class KittiMLSFMobilenet(object):
             'images':[],
             "image_paths":[],
             'lidar_2d':[],
-            "targets": []
+            "targets": [],
+            "label_file_path":[]
         }
 
         for idx, file_path_dict in enumerate(batch_data_filepaths):
@@ -1536,6 +1537,7 @@ class KittiMLSFMobilenet(object):
                 if os.path.exists(label_file_path):
                     #label_bboxes_3d [t[0], t[1], t[2], h, w, l, ry, dist_to_cam]
                     class_labels, label_bboxes_2d, label_bboxes_3d = self.read_label_file(label_file_path)                    
+                    batch_data_items['label_file_path'].append(label_file_path)
 
                     #left_image_arr : (375, 1242, 3)                 
                     transformed_dict = self.transform_sample(
