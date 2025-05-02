@@ -5,17 +5,21 @@ This project implements a multi-modal 2D object detection system that fuses LiDA
 Developed by Shiv Vignesh. 
 
 ## Highlights
-- Yolov3 + Pointnet : Spatial Transformation Fusion 
-  - 📌 Uses raw point clouds
-  - ​🔄 Aligns features to image space​
 
 - Twin Backbone Fusion
   - 🗺️ Converts to 2D (Depth, BEV)​
   - ⚡ Parallel feature extraction​, same model architecture for image and lidar stream.
 
-- Simple Cross Adaptive Fusion
-  - 🔗 Concatenation + CNN-based refinement​
-  - ⚖️ Treats all features equally​
+### Architecture Comparison: YOLOv3 vs MobileNetV2 (as Encoder)
+
+| **Feature**            | **YOLOv3 (FPN)**                            | **MobileNetV2 (Encoder)**                          |
+|------------------------|--------------------------------------------|---------------------------------------------------|
+| **Feature Pyramid**    | ✅ Built-in, strong for multi-scale         | ❌ Must be manually constructed                    |
+| **Speed**              | ❌ Slower                                   | ✅ Faster                                          |
+| **Fusion Flexibility** | ❌ Rigid (13/26/52)                         | ✅ Flexible (depth-level control)                 |
+| **Accuracy (default)** | ✅ Higher for detection tasks               | ⚠️ Lower unless tuned                             |
+| **Anchor Adaptability**| ✅ Anchors matched to feature maps          | ⚠️ Requires tuning for custom depths              |
+
 
 - Attention Based Fusion
   - 🎯 Cross-attention + adaptive weighting​
@@ -44,10 +48,10 @@ Developed by Shiv Vignesh.
 ## Data Preprocessing
 ![data_preprocessing_pipeline](samples/datapreproessing_steps_visualize.png)
 
-## Yolov3 + Pointnet : Spatial Transformation Fusion
+<!-- ## Yolov3 + Pointnet : Spatial Transformation Fusion
 
 ### Model Pipeline
-![Spatial-IL Fusion Pipeline](samples/Proposed-Methodology-Complete.png)
+![Spatial-IL Fusion Pipeline](samples/Proposed-Methodology-Complete.png) -->
 
 ### Detection Outputs
 ![Spatial-IL Fusion Pipeline Detection](samples/000152_detection.png)
@@ -60,9 +64,13 @@ Developed by Shiv Vignesh.
 ![Twin Backbone Fusion](samples/twinbackbone_model_fusion.png)
 
 ### Detection Outputs
-![Twin Backbone Pipeline Detection](results/MLSF-YOLO-Attention-FocalLoss/best-model/detections/001872.png)
+<!-- ![Twin Backbone Pipeline Detection](results/MLSF-YOLO-Attention-FocalLoss/best-model/detections/001872.png)
 ![Twin Backbone Pipeline Detection](results/MLSF-YOLO-Attention-FocalLoss/best-model/detections/000073.png)
-![Twin Backbone Pipeline Detection](results/MLSF-YOLO-Attention-FocalLoss/best-model/detections/002892.png)
+![Twin Backbone Pipeline Detection](results/MLSF-YOLO-Attention-FocalLoss/best-model/detections/002892.png) -->
+
+![Spatial-IL Fusion Pipeline Detection](samples/000152_detection.png)
+![Spatial-IL Fusion Pipeline Detection](samples/000181_detection.png)
+![Spatial-IL Fusion Pipeline Detection](samples/000618_detection.png)
 
 ## Adaptive Fusion Block
 
@@ -177,7 +185,7 @@ Manages the training loop and evaluation strategy:
 }
 ```
 
----
+<!-- ---
 
 ## 🔍 YOLO-PointNet Fusion  
 📄 Config: [`config/yolo_pointnet_fusion_trainer.json`](config/yolo_pointnet_fusion_trainer.json)
@@ -221,7 +229,7 @@ This model fuses YOLO-based image features with PointNet features from LiDAR.
 }
 ```
 
----
+--- -->
 
 ## 🚀 Twin-Backbone MLSF-YOLOv8 Fusion  
 📄 Config: [`config/twin_backbone_trainer.json`](config/twin_backbone_trainer.json)
