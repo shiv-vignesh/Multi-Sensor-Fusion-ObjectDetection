@@ -248,7 +248,6 @@ class MLSFYolo(torch.nn.Module):
         
         if "obj2d" in self.task_type and "obj_3d" in self.task_type:
             self.joint_training = True
-            
         else:
             self.joint_training = False
 
@@ -333,25 +332,37 @@ class MLSFYolo(torch.nn.Module):
 
             if targets is not None:
                 if not self.training:
-                    num_anchors = 3            
+                    num_anchors = 3
                     for i, x in enumerate(outputs):
                         bs, num_preds, _ = x.shape
                         grid_size = int(math.sqrt(num_preds // num_anchors))
                         outputs[i] = x.view(bs, num_anchors, grid_size, grid_size, -1)          
 
-                loss_2d, loss_components_2d = compute_loss(outputs,
-                                                    targets.to(self.image_backbone_device), 
-                                                    self.image_backbone, cls_loss_type=cls_loss_type)
+                if torch.is_tensor(targets):                    
+                    loss_2d, loss_components_2d = compute_loss(outputs,
+                                                        targets.to(self.image_backbone_device), 
+                                                        self.image_backbone, cls_loss_type=cls_loss_type)
+                    loss_components['obj_2d'] = {
+                                'lbox':loss_components_2d[0].item(), 
+                                'lobj':loss_components_2d[1].item(),
+                                'lcls':loss_components_2d[2].item()
+                                }                    
+                    
+                else:
+                    loss_cls = torch.tensor(0.0, device=self.image_backbone_device, requires_grad=True)
+                    loss_obj = torch.tensor(0.0, device=self.image_backbone_device, requires_grad=True)
+                    loss_box = torch.tensor(0.0, device=self.image_backbone_device, requires_grad=True)
+                    
+                    loss_2d = loss_cls + loss_obj + loss_box
+                    loss_components['obj_2d'] = {
+                                'lbox':loss_box.item(), 
+                                'lobj':loss_obj.item(),
+                                'lcls':loss_cls.item()
+                                }                        
 
-                loss_components['obj_2d'] = {
-                            'lbox':loss_components_2d[0].item(), 
-                            'lobj':loss_components_2d[1].item(),
-                            'lcls':loss_components_2d[2].item()
-                            }
-                
                 task_outputs['obj_2d'] = outputs
                 # total_loss += loss_2d
-                
+
             else:
                 if not self.training:
                     num_anchors = 3            
@@ -360,7 +371,7 @@ class MLSFYolo(torch.nn.Module):
                         grid_size = int(math.sqrt(num_preds // num_anchors))
                         outputs[i] = x.view(bs, num_anchors, grid_size, grid_size, -1)
                         
-                        task_outputs['obj_2d'] = outputs
+                    task_outputs['obj_2d'] = outputs
 
         if "obj_3d" in self.task_type:
             if self.lidar_backbone.has_3d_head:
