@@ -7,17 +7,19 @@ from terminaltables import AsciiTable
 import numpy as np
 
 from .logger import Logger
-from dataset_utils.kitti_2d_objectDetect import Kitti2DObjectDetectDataset, KittiMLSFCollateFn, KitiiMLSFCollateAugment
+from dataset_utils.kitti_2d_objectDetect import Kitti2DObjectDetectDataset, KittiMLSFCollateFn, KitiiMLSFCollateAugment, KittiMLSFMobilenet
+from dataset_utils.nuscenes_2d_objectDetect import NuScenesObjectDetectDataset, NuScenesMLSFCollateFn
 from dataset_utils.enums import Enums
 from model.mlsf_yolo import MLSFYolo
+from model.mlsf_mobilenet import MLSFMobilenet
 from model.mlsf_yolov8 import MLSFYolov8
-from model.mlsf_utils import decode_boxes, compute_precision_recall_f1
+# from model.mlsf_utils import decode_boxes, compute_precision_recall_f1
 from model.yolo_utils import xywh2xyxy, non_max_suppression, get_batch_statistics, ap_per_class, non_max_suppression_rotated_bbox, get_batch_statistics_rotated_bbox
 from trainer.trainer_adaptive_fusion import AugmentImage
 
 class MLSFTrainerYolo:
     
-    def __init__(self, mlsf:Union[MLSFYolo, MLSFYolov8], 
+    def __init__(self, mlsf:Union[MLSFYolo, MLSFYolov8, MLSFMobilenet], 
                 dataset_kwargs:dict, optimizer_kwargs:dict,
                 trainer_kwargs:dict, lr_scheduler_kwargs:dict):
         
@@ -54,13 +56,19 @@ class MLSFTrainerYolo:
         self.logger.log_message(f'Train Dataloader:')
         self.logger.log_new_line()
         
-        self.logger.log_message(f'LiDAR Dir: {self.train_dataloader.dataset.lidar_dir}')        
-        self.logger.log_message(f'Calibration Dir: {self.train_dataloader.dataset.calibration_dir}')
-        self.logger.log_message(f'Left Image Dir: {self.train_dataloader.dataset.left_image_dir}')
-        self.logger.log_message(f'Right Image Dir: {self.train_dataloader.dataset.right_image_dir}')
-        self.logger.log_message(f'Labels Dir: {self.train_dataloader.dataset.labels_dir}')
-        self.logger.log_message(f'Train Batch Size: {self.train_dataloader.batch_size}')
-        self.logger.log_message(f'Train Apply Augmentation: {self.train_dataloader.collate_fn.apply_augmentation}')
+        if type(self.train_dataloader.dataset) == Kitti2DObjectDetectDataset:
+            self.logger.log_message(f'  Training on KiTTi Dataset   ')
+            self.logger.log_message(f'LiDAR Dir: {self.train_dataloader.dataset.lidar_dir}')        
+            self.logger.log_message(f'Calibration Dir: {self.train_dataloader.dataset.calibration_dir}')
+            self.logger.log_message(f'Left Image Dir: {self.train_dataloader.dataset.left_image_dir}')
+            self.logger.log_message(f'Right Image Dir: {self.train_dataloader.dataset.right_image_dir}')
+            self.logger.log_message(f'Labels Dir: {self.train_dataloader.dataset.labels_dir}')
+            self.logger.log_message(f'Train Batch Size: {self.train_dataloader.batch_size}')
+            self.logger.log_message(f'Train Apply Augmentation: {self.train_dataloader.collate_fn.apply_augmentation}')
+        elif type(self.train_dataloader.dataset) == NuScenesObjectDetectDataset:
+            self.logger.log_message(f'  Training on NuScenes Dataset   ')
+            self.logger.log_message(f'  Blobs Files: {self.train_dataloader.dataset.table_blob_paths}')
+            self.logger.log_message(f'Train Batch Size: {self.train_dataloader.batch_size}')
         
         self.logger.log_line()
         
@@ -68,14 +76,19 @@ class MLSFTrainerYolo:
         self.logger.log_message(f'Validation Dataloader:')
         self.logger.log_new_line()
         
-        self.logger.log_message(f'LiDAR Dir: {self.validation_dataloader.dataset.lidar_dir}')        
-        self.logger.log_message(f'Calibration Dir: {self.validation_dataloader.dataset.calibration_dir}')
-        self.logger.log_message(f'Left Image Dir: {self.validation_dataloader.dataset.left_image_dir}')
-        self.logger.log_message(f'Right Image Dir: {self.validation_dataloader.dataset.right_image_dir}')
-        self.logger.log_message(f'Labels Dir: {self.validation_dataloader.dataset.labels_dir}')
-        self.logger.log_message(f'Train Batch Size: {self.validation_dataloader.batch_size} - Ten Percent Train Log {self.ten_percent_train_batch}')
-        self.logger.log_message(f'Validation Apply Augmentation: {self.validation_dataloader.collate_fn.apply_augmentation}')
-        
+        if type(self.validation_dataloader.dataset) == Kitti2DObjectDetectDataset:
+            self.logger.log_message(f'LiDAR Dir: {self.validation_dataloader.dataset.lidar_dir}')        
+            self.logger.log_message(f'Calibration Dir: {self.validation_dataloader.dataset.calibration_dir}')
+            self.logger.log_message(f'Left Image Dir: {self.validation_dataloader.dataset.left_image_dir}')
+            self.logger.log_message(f'Right Image Dir: {self.validation_dataloader.dataset.right_image_dir}')
+            self.logger.log_message(f'Labels Dir: {self.validation_dataloader.dataset.labels_dir}')
+            self.logger.log_message(f'Train Batch Size: {self.validation_dataloader.batch_size} - Ten Percent Train Log {self.ten_percent_train_batch}')
+            self.logger.log_message(f'Validation Apply Augmentation: {self.validation_dataloader.collate_fn.apply_augmentation}')
+        elif type(self.validation_dataloader.dataset) == NuScenesObjectDetectDataset:
+            self.logger.log_message(f'  Training on NuScenes Dataset   ')
+            self.logger.log_message(f'  Blobs Files: {self.validation_dataloader.dataset.table_blob_paths}')
+            self.logger.log_message(f'Train Batch Size: {self.validation_dataloader.batch_size}')
+            
         self.logger.log_line()
 
         self._init_optimizer(optimizer_kwargs)
@@ -99,47 +112,41 @@ class MLSFTrainerYolo:
             self.logger.log_message(f'  MLSF Detection head: {self.mlsf.detection_heads.__class__.__name__} -- {self.mlsf.adaptive_fusion_device}')
             self.logger.log_new_line()            
             self.logger.log_message(f'MLSF Image Size: {self.mlsf.image_width}x{self.mlsf.image_height}')
-                
+
         self.logger.log_new_line()
-            
+
     def _init_dataloader(self, dataset_kwargs:dict):
-        
-        def create_dataloader(kwargs:dict, image_resize:tuple, lidar_map_type:str, return_augment_loader:bool=False):
-            dataset = Kitti2DObjectDetectDataset(
-                lidar_dir=kwargs['lidar_dir'],
-                calibration_dir=kwargs['calibration_dir'],
-                left_image_dir=kwargs['left_image_dir'],
-                right_image_dir=kwargs['right_image_dir'],
-                labels_dir=kwargs['labels_dir']
+
+        if dataset_kwargs['_type'] == 'kitti':
+            self._init_dataloader_kitti(dataset_kwargs)
+
+        if dataset_kwargs['_type'] == 'nuscenes':
+            self._init_dataloader_nuscenes(dataset_kwargs)            
+
+    def _init_dataloader_nuscenes(self, dataset_kwargs:dict):
+
+        def create_dataloader(kwargs:dict, image_resize:tuple, lidar_map_type:str, 
+                            return_augment_loader:bool=False):
+
+            dataset = NuScenesObjectDetectDataset(
+                table_blob_paths=kwargs['table_blob_paths'], 
+                root_dir=kwargs['root_dir']
             )
-            
-            if return_augment_loader:
-                dataloader = torch.utils.data.DataLoader(
-                    dataset, 
-                    batch_size=kwargs['batch_size'], 
-                    collate_fn=KitiiMLSFCollateAugment(
-                        image_resize=image_resize,
-                        detection_head='yolo'                        
-                    ),
-                    shuffle=True
-                )
-            else:                
-                dataloader = torch.utils.data.DataLoader(
-                    dataset, 
-                    batch_size=kwargs['batch_size'], 
-                    collate_fn=KittiMLSFCollateFn(
-                        image_resize=image_resize,
-                        detection_head='yolo', 
-                        lidar_map_type=lidar_map_type
-                    ),
-                    shuffle=True
-                )
+
+            dataloader = torch.utils.data.DataLoader(
+                dataset, 
+                batch_size=kwargs['batch_size'], 
+                collate_fn=NuScenesMLSFCollateFn(
+                    image_resize=image_resize,                    
+                    lidar_map_type=lidar_map_type   
+                )             
+            )
 
             return dataloader
-        
-        if dataset_kwargs['kitti_trainer_dataset_kwargs']:
+
+        if dataset_kwargs['nuscenes_dataset_kwargs']['nuscenes_trainer_dataset_kwargs']:
             self.train_dataloader = create_dataloader(
-                dataset_kwargs['kitti_trainer_dataset_kwargs'], 
+                dataset_kwargs['nuscenes_dataset_kwargs']['nuscenes_trainer_dataset_kwargs'], 
                 tuple(dataset_kwargs['image_resize']), 
                 dataset_kwargs['lidar_map_type'],
                 return_augment_loader=self.modality_corrupt
@@ -153,15 +160,92 @@ class MLSFTrainerYolo:
             )
             exit(1)
         
-        if dataset_kwargs['kitti_validation_dataset_kwargs']:
+        if dataset_kwargs['nuscenes_dataset_kwargs']['nuscenes_validation_dataset_kwargs']:
             self.validation_dataloader = create_dataloader(
-                dataset_kwargs['kitti_validation_dataset_kwargs'], 
+                dataset_kwargs['nuscenes_dataset_kwargs']['nuscenes_validation_dataset_kwargs'], 
                 tuple(dataset_kwargs['image_resize']), 
                 dataset_kwargs['lidar_map_type'],
             )
             self.val_batch_size = self.validation_dataloader.batch_size
         else:
             self.validation_dataloader = None
+    
+    def _init_dataloader_kitti(self, dataset_kwargs:dict):
+        
+        def create_dataloader(kwargs:dict, image_resize:tuple, lidar_map_type:str, 
+                            return_augment_loader:bool=False):
+            dataset = Kitti2DObjectDetectDataset(
+                lidar_dir=kwargs['lidar_dir'],
+                calibration_dir=kwargs['calibration_dir'],
+                left_image_dir=kwargs['left_image_dir'],
+                right_image_dir=kwargs['right_image_dir'],
+                labels_dir=kwargs['labels_dir']
+            )
+            
+            if type(self.mlsf) == MLSFYolo or type(self.mlsf) == MLSFYolov8:
+                if return_augment_loader:
+                    dataloader = torch.utils.data.DataLoader(
+                        dataset, 
+                        batch_size=kwargs['batch_size'], 
+                        collate_fn=KitiiMLSFCollateAugment(
+                            image_resize=image_resize,
+                            detection_head='yolo'                        
+                        ),
+                        shuffle=True
+                    )
+                else:
+                    dataloader = torch.utils.data.DataLoader(
+                        dataset, 
+                        batch_size=kwargs['batch_size'], 
+                        collate_fn=KittiMLSFCollateFn(
+                            image_resize=image_resize,
+                            detection_head='yolo', 
+                            lidar_map_type=lidar_map_type
+                        ),
+                        shuffle=True
+                    )
+
+                return dataloader
+            
+            elif type(self.mlsf) == MLSFMobilenet:
+                dataloader = torch.utils.data.DataLoader(
+                    dataset, 
+                    batch_size=kwargs['batch_size'], 
+                    collate_fn=KittiMLSFMobilenet(
+                        image_resize=image_resize,
+                        detection_head='yolo', 
+                        lidar_map_type=lidar_map_type
+                    ),
+                    shuffle=True
+                )
+
+            return dataloader
+        
+        if dataset_kwargs['kitti_dataset_kwargs']['kitti_trainer_dataset_kwargs']:
+            self.train_dataloader = create_dataloader(
+                dataset_kwargs['kitti_dataset_kwargs']['kitti_trainer_dataset_kwargs'], 
+                tuple(dataset_kwargs['image_resize']), 
+                dataset_kwargs['lidar_map_type'],
+                return_augment_loader=self.modality_corrupt
+            )                    
+            self.train_batch_size = self.train_dataloader.batch_size
+            
+        else:
+            self.logger.log_line()
+            self.logger.log_message(
+                f'Trainer Kwargs not Found: {dataset_kwargs["trainer_kwargs"]}'
+            )
+            exit(1)
+        
+        if dataset_kwargs['kitti_dataset_kwargs']['kitti_validation_dataset_kwargs']:
+            self.validation_dataloader = create_dataloader(
+                dataset_kwargs['kitti_dataset_kwargs']['kitti_validation_dataset_kwargs'], 
+                tuple(dataset_kwargs['image_resize']), 
+                dataset_kwargs['lidar_map_type'],
+            )
+            self.val_batch_size = self.validation_dataloader.batch_size
+        else:
+            self.validation_dataloader = None            
         
     def _init_optimizer(self, optimizer_kwargs:dict):
         
@@ -182,11 +266,15 @@ class MLSFTrainerYolo:
                 'params':self.mlsf.adaptive_fusion_module.parameters(), 'lr':optimizer_kwargs['adaptive_fusion_lr'], 'model_name':f'AdaptiveFusionModule'
             })
             
-        if type(self.mlsf) == MLSFYolov8:
+        if type(self.mlsf) == MLSFYolov8 or type(self.mlsf) == MLSFMobilenet:
             params_dict.append({
-                'params':self.mlsf.detection_heads.parameters(), 'lr':optimizer_kwargs['ssd_head_lr'], 'model_name':f'Yolov8 Detection Head'
-            })            
-                
+                'params':self.mlsf.detection_heads.parameters(), 'lr':optimizer_kwargs['ssd_head_lr'], 'model_name':f'Detection Head'
+            })
+            
+            # params_dict.append({
+            #     'params':self.mlsf.detection_heads.parameters(), 'lr':optimizer_kwargs['ssd_head_lr'], 'model_name':f' Detection Head'
+            # })
+        
         if optimizer_kwargs['_type'] == 'SGD':
             self.optimizer = torch.optim.SGD(
                 params_dict, 
@@ -237,7 +325,6 @@ class MLSFTrainerYolo:
         self.logger.log_new_line()
 
         self.total_training_time = 0.0
-
         self.cur_epoch = 0   
         # self.best_score = 0.0
         self.best_score = defaultdict(float)
@@ -283,7 +370,20 @@ class MLSFTrainerYolo:
             elif self.modality_corrupt and self.mlsf.use_lidar_backbone:
                 loss, loss_components = self.train_one_step_modality_corrupt(data_items)
             else:
-                loss, loss_components, outputs = self.train_one_step(data_items)                
+                
+                if not torch.is_tensor(data_items['targets']) or data_items['targets'].numel() == 0:
+                    continue
+                
+                try:
+                    loss, loss_components, _ = self.train_one_step(data_items)
+                except Exception as e:
+                    self.logger.log_message(f"Error during training step: {e} skipping batch")
+                    
+                    for k, v in data_items.items():
+                        if torch.is_tensor(v):
+                            print(f'{k} {v.shape}')
+                    
+                    continue
 
             step_end_time = time.time()
 
@@ -322,23 +422,25 @@ class MLSFTrainerYolo:
         # writer.close()
             
     def train_one_step(self, data_items:dict):
-        
+
         with torch.set_grad_enabled(True):
             loss, loss_components, outputs = self.mlsf(
                 data_items['images'],
                 data_items['lidar_2d'] if self.mlsf.use_lidar_backbone else None,
-                data_items['targets'], data_items['targets_3d'],
-                cls_loss_type="focal" if self.cur_epoch > 20 else 'bce'
+                data_items['targets'] if "targets" in data_items else None, 
+                data_items['targets_3d'] if "targets_3d" in data_items else None,
+                # cls_loss_type="focal" if self.cur_epoch > 20 else 'bce'
+                cls_loss_type="focal"
             )
-                      
+
             with torch.autograd.set_detect_anomaly(True):
                 loss.backward()
-                
+
             if self.gradient_clipping:
                 torch.nn.utils.clip_grad_norm_(self.mlsf.parameters(), self.gradient_clipping)                 
 
         return loss, loss_components, outputs
-    
+
     def train_one_step_modality_corrupt(self, data_items:dict):
 
         total_loss = 0
@@ -350,7 +452,8 @@ class MLSFTrainerYolo:
             loss, loss_components, _ = self.mlsf(
                 data_items['images'],
                 data_items['lidar_2d'] if self.mlsf.use_lidar_backbone else None,
-                data_items['targets'], 
+                data_items['targets'] if "targets" in data_items else None, 
+                data_items['targets_3d'] if "targets_3d" in data_items else None,
                 cls_loss_type="focal" if self.cur_epoch > 20 else 'bce'
             )
             losses.append(loss)
@@ -367,7 +470,8 @@ class MLSFTrainerYolo:
             loss, loss_components, _ = self.mlsf(
                 data_items['images'],
                 data_items['lidar_2d'] if self.mlsf.use_lidar_backbone else None,
-                data_items['targets'], 
+                data_items['targets'] if "targets" in data_items else None, 
+                data_items['targets_3d'] if "targets_3d" in data_items else None,
                 cls_loss_type="focal" if self.cur_epoch > 20 else 'bce'
             )
             # Compute average loss across cases
@@ -396,7 +500,8 @@ class MLSFTrainerYolo:
             loss, loss_components, _ = self.mlsf(
                 data_items['images'],
                 data_items['lidar_2d'] if self.mlsf.use_lidar_backbone else None,
-                data_items['targets'], 
+                data_items['targets'] if "targets" in data_items else None, 
+                data_items['targets_3d'] if "targets_3d" in data_items else None,
                 cls_loss_type="focal" if self.cur_epoch > 20 else 'bce'
             )
             losses.append(loss)
@@ -481,35 +586,58 @@ class MLSFTrainerYolo:
         labels = defaultdict(list)
         # sample_metrics = {}  # List of tuples (TP, confs, pred)
         task_sample_metrics = defaultdict(list)
-        
+
         if type(self.mlsf) == MLSFYolo:
             img_size = self.mlsf.image_backbone.hyperparams['height']
-        elif type(self.mlsf) == MLSFYolov8:
+        
+        elif type(self.mlsf) == MLSFMobilenet:
             img_size = self.mlsf.image_height
         
+        elif type(self.mlsf) == MLSFYolov8:
+            img_size = self.mlsf.image_height
+
         total_eval_loss = 0.0
         for batch_idx, data_items in enumerate(val_epoch_iter):
+            
+            if not torch.is_tensor(data_items['targets']) or data_items['targets'].numel() == 0:
+                continue
+
             with torch.no_grad():
-                loss, loss_components, outputs = self.mlsf(
-                    data_items['images'],
-                    data_items['lidar_2d'] if self.mlsf.use_lidar_backbone else None,
-                    data_items['targets'], data_items['targets_3d'], 
-                )
-                        
+                try:
+                    loss, loss_components, outputs = self.mlsf(
+                        data_items['images'],
+                        data_items['lidar_2d'] if self.mlsf.use_lidar_backbone else None,
+                        data_items['targets'] if "targets" in data_items else None, 
+                        data_items['targets_3d'] if "targets_3d" in data_items else None
+                    )
+                except Exception as e:
+                    self.logger.log_message(f"Error during training step: {e} skipping batch")
+                    for k, v in data_items.items():
+                        if torch.is_tensor(v):
+                            print(f'{k} {v.shape}')                    
+                    continue
+            
             total_eval_loss += loss.item()
 
-            if type(self.mlsf) == MLSFYolo:
-                
+            if type(self.mlsf) == MLSFYolo or type(self.mlsf) == MLSFMobilenet:
+
                 for task_type in outputs:
                     if task_type == 'obj_2d':
+                        
+                        if not torch.is_tensor(data_items['targets']) or data_items['targets'].numel() == 0:
+                            continue
 
                         targets = data_items['targets'].cpu()
                         labels[task_type] += targets[:, 1] #[class_id] 
 
                         targets[:, 2:] = xywh2xyxy(targets[:, 2:])
-                        targets[:, 2:] *= img_size                    
+                        targets[:, 2:] *= img_size
 
-                        anchor_grids = [yolo_layer.anchor_grid for yolo_layer in self.mlsf.image_backbone.yolo_layers]
+                        if type(self.mlsf) == MLSFYolo:
+                            anchor_grids = [yolo_layer.anchor_grid for yolo_layer in self.mlsf.image_backbone.yolo_layers]
+                        elif type(self.mlsf) == MLSFMobilenet:
+                            anchor_grids = [det_layer.anchor_grid for det_layer in self.mlsf.detection_heads.values()]
+                        
                         outputs[task_type] = apply_sigmoid_activation(outputs[task_type], data_items['images'].size(2), anchor_grids)
                         outputs[task_type] = non_max_suppression(outputs[task_type])
                         task_sample_metrics[task_type] += get_batch_statistics(
@@ -526,7 +654,7 @@ class MLSFTrainerYolo:
                         outputs[task_type] = non_max_suppression_rotated_bbox(outputs[task_type], conf_thres=0.5, nms_thres=0.5)
                         task_sample_metrics[task_type] += get_batch_statistics_rotated_bbox(outputs[task_type], 
                                                                         targets.to(outputs[task_type].device), 
-                                                                        iou_threshold=0.5)                        
+                                                                        iou_threshold=0.5)
 
             elif type(self.mlsf) == MLSFYolov8:
                 ious = outputs['ious']
@@ -552,14 +680,19 @@ class MLSFTrainerYolo:
         for task_type, sample_metrics in task_sample_metrics.items():
             
             self.logger.log_message(f'  Computing Metrics for {task_type}   ')
-
+            
             true_positives, pred_scores, pred_labels = [
                 np.concatenate(x, 0) for x in list(zip(*sample_metrics))]            
 
             metrics_output = ap_per_class(
                 true_positives, pred_scores, pred_labels, labels[task_type]) 
             
-            table_string = self.print_eval_stats(metrics_output, list(Enums.KiTTi_label2Id.keys()), True)
+            if type(self.validation_dataloader.dataset) == Kitti2DObjectDetectDataset:
+                class_names = list(Enums.KiTTi_label2Id.keys())
+            elif type(self.validation_dataloader.dataset) == NuScenesObjectDetectDataset:
+                class_names = list(Enums.nuscenes_label2Id.keys())
+
+            table_string = self.print_eval_stats(metrics_output, class_names, True)
             _, _, AP, _, _ = metrics_output        
             
             if AP.mean() > (self.best_score[task_type] + 0.02):
@@ -633,5 +766,5 @@ class MLSFTrainerYolo:
                 self.logger.log_message(
                     f'  Loss BBox: {lbox:.4f} -- Loss Cls: {lcls:.4f} -- Loss Obj: {lobj:.4f}'
                 )
-                
+
             self.logger.log_new_line()
