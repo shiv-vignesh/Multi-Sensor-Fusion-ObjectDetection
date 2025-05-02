@@ -426,6 +426,69 @@ def get_batch_statistics_eval(outputs, targets, iou_threshold, difficulty_levels
     # else:
     #     return batch_metrics
 
+def compute_stats_per_difficulty(outputs, targets, obj_levels, iou_threshold=0.45):
+    """
+    Compute true positives per difficulty level per sample.
+
+    Parameters:
+    - outputs: list of length B, each [N_i, 6] -> (x1, y1, x2, y2, score, cls)
+    - targets: Tensor [M, 6] -> (batch_idx, cls, x1, y1, x2, y2)
+    - obj_levels: List[str] of length M -> difficulty level for each target box
+    - iou_threshold: IoU threshold for TP
+
+    Returns:
+    - stats_per_sample: List[Dict[difficulty, TP count]]
+    """
+    stats_per_sample = []
+
+    for sample_i, output in enumerate(outputs):
+        if output is None or len(output) == 0:
+            stats_per_sample.append({})
+            continue
+
+        pred_boxes = output[:, :4]
+        pred_scores = output[:, 4]
+        pred_labels = output[:, 5].int()
+
+        # Filter GTs for this sample
+        sample_mask = targets[:, 0] == sample_i
+        sample_targets = targets[sample_mask]
+        sample_difficulties = [obj_levels[i] for i in range(len(obj_levels)) if sample_mask[i]]
+
+        if len(sample_targets) == 0:
+            stats_per_sample.append({})
+            continue
+
+        gt_labels = sample_targets[:, 1].int()
+        gt_boxes = sample_targets[:, 2:6]
+
+        detected_gt = set()
+        tp_per_difficulty = {}
+
+        for pred_box, pred_label in zip(pred_boxes, pred_labels):
+            # Match candidate GTs
+            matches = [(i, box) for i, (box, label) in enumerate(zip(gt_boxes, gt_labels))
+                       if label == pred_label and i not in detected_gt]
+
+            if not matches:
+                continue
+
+            match_indices, match_boxes = zip(*matches)
+            ious = bbox_iou(pred_box.unsqueeze(0), torch.stack(match_boxes)).squeeze(0)
+            best_iou, best_idx = ious.max(0)
+            best_iou = best_iou.item()
+            best_match_idx = match_indices[best_idx.item()]
+
+            if best_iou >= iou_threshold:
+                level = sample_difficulties[best_match_idx]
+                tp_per_difficulty[level] = tp_per_difficulty.get(level, 0) + 1
+                detected_gt.add(best_match_idx)
+
+        stats_per_sample.append(tp_per_difficulty)
+
+    return stats_per_sample
+
+
 def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False):
     """
     Returns the IoU of two bounding boxes
