@@ -176,9 +176,12 @@ def fast_rotated_iou(box1, boxes):
 
     return np.array(ious)
 
-def get_batch_statistics_rotated_bbox(outputs, targets, iou_threshold):
+def get_batch_statistics_rotated_bbox(outputs, targets, iou_threshold, return_matching_preds:bool=False):
     """ Compute true positives, predicted scores and predicted labels per sample """
+    """ return_matching_preds: temporary fix for 3D box visualization; current has high FP. """
     batch_metrics = []
+    batch_detected_boxes = []
+    
     for sample_i in range(len(outputs)):
 
         if outputs[sample_i] is None:
@@ -193,9 +196,10 @@ def get_batch_statistics_rotated_bbox(outputs, targets, iou_threshold):
 
         annotations = targets[targets[:, 0] == sample_i][:, 1:]
         target_labels = annotations[:, 0] if len(annotations) else []
-        
+
         if len(annotations):
             detected_boxes = []
+            # matching_boxes = []
             target_boxes = annotations[:, 1:]
 
             for pred_i, (pred_box, pred_label) in enumerate(zip(pred_boxes, pred_labels)):
@@ -214,9 +218,16 @@ def get_batch_statistics_rotated_bbox(outputs, targets, iou_threshold):
                 if iou >= iou_threshold and box_index not in detected_boxes:
                     true_positives[pred_i] = 1                    
                     detected_boxes += [box_index]
+                    # matching_boxes.append(pred_box)
                 # print(f'True Positive Detected {sample_i}: {len(detected_boxes)} {len(target_boxes)}')
-        
+
+            batch_detected_boxes.append(detected_boxes)
+        # print(f'True Positive Detected {sample_i}: {len(detected_boxes)} {len(target_boxes)} {len(pred_boxes)}')
+
         batch_metrics.append([true_positives, pred_scores, pred_labels])
+    
+    if return_matching_preds:
+        return batch_metrics, batch_detected_boxes
     
     return batch_metrics
 
@@ -336,6 +347,84 @@ def get_batch_statistics(outputs, targets, iou_threshold):
                     detected_boxes += [box_index]
         batch_metrics.append([true_positives, pred_scores, pred_labels])
     return batch_metrics
+
+def get_batch_statistics_eval(outputs, targets, iou_threshold, difficulty_levels=None):
+
+    """
+    Compute true positives (TP), false positives (FP), false negatives (FN),
+    predicted scores and predicted labels per sample.
+    """
+    batch_metrics = []
+    stats_per_difficulty = []
+
+    for sample_i in range(len(outputs)):
+        if outputs[sample_i] is None:
+            continue
+
+        output = outputs[sample_i]
+        pred_boxes = output[:, :4]
+        pred_scores = output[:, 4]
+        pred_labels = output[:, -1]
+
+        num_preds = pred_boxes.shape[0]
+        true_positives = np.zeros(num_preds)
+        false_positives = np.zeros(num_preds)
+
+        annotations = targets[targets[:, 0] == sample_i][:, 1:]
+        target_labels = annotations[:, 0] if len(annotations) else []
+        num_targets = len(annotations)
+        detected_boxes = []
+        false_negatives = []  # To store GT class labels for missed boxes
+        
+        # Difficulty tracking
+        # if difficulty_levels is not None:
+        #     sample_difficulties = difficulty_levels.get(sample_i, [])
+        #     tp_per_level = {'easy': 0, 'moderate': 0, 'hard': 0}
+
+        if num_targets:
+            target_boxes = annotations[:, 1:]
+
+            for pred_i, (pred_box, pred_label) in enumerate(zip(pred_boxes, pred_labels)):
+
+                # Stop if all GTs already matched
+                if len(detected_boxes) == num_targets:
+                    break
+
+                if pred_label not in target_labels:
+                    false_positives[pred_i] = 1
+                    continue
+
+                filtered = [(i, t) for i, t in enumerate(target_boxes) if target_labels[i] == pred_label and i not in detected_boxes]
+                if not filtered:
+                    false_positives[pred_i] = 1
+                    continue
+
+                filtered_indices, filtered_targets = zip(*filtered)
+                iou, best_idx = bbox_iou(pred_box.unsqueeze(0), torch.stack(filtered_targets)).max(0)
+                best_target_idx = filtered_indices[best_idx]
+
+                if iou >= iou_threshold:
+                    true_positives[pred_i] = 1
+                    detected_boxes.append(best_target_idx)
+                    # level = sample_difficulties[best_target_idx] if best_target_idx < len(sample_difficulties) else 'unknown'
+                    # if level in tp_per_level:
+                    #     tp_per_level[level] += 1
+                                            
+                else:
+                    false_positives[pred_i] = 1                    
+        else:
+            false_positives = np.ones(num_preds)
+
+        # Count false negatives (GT boxes not matched)
+        false_negatives.extend(target_labels[i] for i in range(num_targets) if i not in detected_boxes)
+
+        batch_metrics.append([true_positives, false_positives, false_negatives, pred_scores, pred_labels])
+        # stats_per_difficulty.append(tp_per_level)
+    return batch_metrics
+    # if difficulty_levels is not None:
+    #     return batch_metrics, stats_per_difficulty
+    # else:
+    #     return batch_metrics
 
 def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False):
     """
