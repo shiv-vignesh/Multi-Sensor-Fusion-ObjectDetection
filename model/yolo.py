@@ -213,6 +213,9 @@ class YOLOLayer3D(nn.Module):
         self.metrics = {}
         self.img_dim = img_dim
         self.grid_size = 0  # grid size
+        
+        self.use_iou_loss = False
+        self.use_focal_loss = True
 
     def compute_grid_offsets(self, grid_size, cuda=True):
         self.grid_size = grid_size
@@ -287,20 +290,42 @@ class YOLOLayer3D(nn.Module):
             )
 
             # Loss : Mask outputs to ignore non-existing objects (except with conf. loss)
-            loss_x = self.mse_loss(x[obj_mask], tx[obj_mask])
-            loss_y = self.mse_loss(y[obj_mask], ty[obj_mask])
-            loss_w = self.mse_loss(w[obj_mask], tw[obj_mask])
-            loss_h = self.mse_loss(h[obj_mask], th[obj_mask])
-            loss_im = self.mse_loss(im[obj_mask], tim[obj_mask])
-            loss_re = self.mse_loss(re[obj_mask], tre[obj_mask])
-            loss_eular = loss_im + loss_re
-            loss_conf_obj = self.bce_loss(pred_conf[obj_mask], tconf[obj_mask])
-            loss_conf_noobj = self.bce_loss(pred_conf[noobj_mask], tconf[noobj_mask])
-            loss_conf = self.obj_scale * loss_conf_obj + self.noobj_scale * loss_conf_noobj
-            loss_cls = self.bce_loss(pred_cls[obj_mask], tcls[obj_mask])
-            total_loss = loss_x + loss_y + loss_w + loss_h + loss_eular + loss_conf + loss_cls
             
-            loss_box = loss_x + loss_y + loss_w + loss_h + loss_eular
+            if self.use_iou_loss:
+                loss_box = (1.0 - iou_scores).mean()               
+            
+            else:
+                loss_x = self.mse_loss(x[obj_mask], tx[obj_mask])
+                loss_y = self.mse_loss(y[obj_mask], ty[obj_mask])
+                loss_w = self.mse_loss(w[obj_mask], tw[obj_mask])
+                loss_h = self.mse_loss(h[obj_mask], th[obj_mask])
+                loss_im = self.mse_loss(im[obj_mask], tim[obj_mask])
+                loss_re = self.mse_loss(re[obj_mask], tre[obj_mask])
+                loss_eular = loss_im + loss_re
+                
+                loss_box = loss_x + loss_y + loss_w + loss_h + loss_eular
+
+            # loss_conf_obj = self.bce_loss(pred_conf[obj_mask], tconf[obj_mask])
+            # loss_conf_noobj = self.bce_loss(pred_conf[noobj_mask], tconf[noobj_mask])
+            # loss_conf = self.obj_scale * loss_conf_obj + self.noobj_scale * loss_conf_noobj
+
+            tobj = torch.zeros_like(pred_conf, device=pred_conf.device)
+            tobj = iou_scores
+            loss_conf = self.bce_loss(pred_conf, tobj.clamp(0))         
+        
+            if self.use_focal_loss:
+                alpha=0.25
+                gamma=2.0
+                
+                bce_loss = torch.nn.functional.binary_cross_entropy(pred_cls[obj_mask], tcls[obj_mask], reduction="none")
+                pt = torch.exp(-bce_loss)
+                loss_cls = alpha * (1 - pt) ** gamma * bce_loss
+                loss_cls = loss_cls.mean()
+                
+            else:
+                loss_cls = self.bce_loss(pred_cls[obj_mask], tcls[obj_mask])
+            
+            total_loss = loss_box + loss_conf + loss_cls
 
             # Metrics
             cls_acc = 100 * class_mask[obj_mask].mean()
@@ -319,12 +344,13 @@ class YOLOLayer3D(nn.Module):
 
             self.metrics = {
                 "loss": to_cpu(total_loss).item(),
-                "x": to_cpu(loss_x).item(),
-                "y": to_cpu(loss_y).item(),
-                "w": to_cpu(loss_w).item(),
-                "h": to_cpu(loss_h).item(),
-                "im": to_cpu(loss_im).item(),
-                "re": to_cpu(loss_re).item(),
+                # "x": to_cpu(loss_x).item(),
+                # "y": to_cpu(loss_y).item(),
+                # "w": to_cpu(loss_w).item(),
+                # "h": to_cpu(loss_h).item(),
+                # "im": to_cpu(loss_im).item(),
+                # "re": to_cpu(loss_re).item(),
+                "box":to_cpu(loss_box).item(),
                 "conf": to_cpu(loss_conf).item(),
                 "cls": to_cpu(loss_cls).item(),
                 "cls_acc": to_cpu(cls_acc).item(),
