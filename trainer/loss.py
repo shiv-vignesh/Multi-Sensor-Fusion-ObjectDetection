@@ -179,7 +179,7 @@ def build_targets(p, targets, model, model_type:str='yolov3'):
     
     if model_type == 'yolov3':
         detection_layers = model.yolo_layers
-    elif model_type == 'yolov8':
+    elif model_type == 'yolov8' or model_type == "mobilenet":
         #detection head module
         detection_layers = model.values()
     
