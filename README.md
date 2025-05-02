@@ -123,11 +123,15 @@ Gating Mechanism (if enabled): Learns optimal weighting of image and LiDAR featu
 
 
 
-1. **YOLO-PointNet Fusion**  
-   📄 Config: [`config/yolo_pointnet_fusion_trainer.json`](config/yolo_pointnet_fusion_trainer.json)
+<!-- 1. **YOLO-PointNet Fusion**  
+   📄 Config: [`config/yolo_pointnet_fusion_trainer.json`](config/yolo_pointnet_fusion_trainer.json) -->
 
-2. **Twin-Backbone MLSF-YOLOv8 Fusion**  
+1. **Twin-Backbone MLSF-YOLOv3 Fusion**  
    📄 Config: [`config/twin_backbone_trainer.json`](config/mlsf_trainer.json)
+
+1. **Twin-Backbone MLSF-YOLOv3 Fusion**  
+   📄 Config: [`config/twin_backbone_trainer.json`](config/mlsf_trainer.json)
+
 
 Both models support feature-level fusion, independent backbone training, and robustness augmentations.
 
