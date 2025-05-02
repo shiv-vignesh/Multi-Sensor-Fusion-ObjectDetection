@@ -4,7 +4,7 @@ import torch
 from dataset_utils.enums import Enums
 from model.mlsf_yolo import MLSFYolo
 from model.mlsf_yolov8 import MLSFYolov8
-from model.mlsf_mobilenet import MLSF
+from model.mlsf_mobilenet import MLSFMobilenet
 from trainer.trainer_mlsf_yolo import MLSFTrainerYolo
 from trainer.trainer_mlsf_ssd import MLSFTrainerSSD
 
@@ -64,9 +64,10 @@ def create_mlsf_yolo(model_kwargs:dict, model_type:str, weights_path:str=None, i
             num_fusion_blocks=model_kwargs['num_fusion_blocks'], 
             fusion_type=model_kwargs['fusion_type'], 
             weighted_fusion=model_kwargs['weighted_fusion'],
-            task_type=model_kwargs['task_type']
+            task_type=model_kwargs['task_type'],
+            use_lidar_backbone=model_kwargs['use_lidar_backbone']
         )        
-        
+
         if weights_path:
             if weights_path.endswith(".pt") or weights_path.endswith(".pth"):
                 # Load checkpoint weights                
@@ -83,13 +84,18 @@ def create_mlsf_yolo(model_kwargs:dict, model_type:str, weights_path:str=None, i
                     
                     print(f'Loading with Mismatch for MLSF Image Backbone: {mlsf.image_backbone.__class__.__name__}')
                     load_torch_mismatch_weights(mlsf.image_backbone.cpu(), weights_path, strict_loading=False)
-                    print(f'Loading with Mismatch for MLSF LiDAR Backbone: {mlsf.lidar_backbone.__class__.__name__}')
-                    load_torch_mismatch_weights(mlsf.lidar_backbone.cpu(), weights_path, strict_loading=False)
+
+                    if mlsf.use_lidar_backbone:
+                        print(f'Loading with Mismatch for MLSF LiDAR Backbone: {mlsf.lidar_backbone.__class__.__name__}')
+                        load_torch_mismatch_weights(mlsf.lidar_backbone.cpu(), weights_path, strict_loading=False)
+
                     print(f'Done Loading')
                     
                 
                 mlsf.image_backbone.to(mlsf.image_backbone_device)
-                mlsf.lidar_backbone.to(mlsf.lidar_backbone_device)
+                
+                if mlsf.use_lidar_backbone:
+                    mlsf.lidar_backbone.to(mlsf.lidar_backbone_device)
                 
                 if mlsf.apply_adaptive_fusion:
                     mlsf.adaptive_fusion_module.to(mlsf.adaptive_fusion_device)
@@ -100,7 +106,7 @@ def create_mlsf_yolo(model_kwargs:dict, model_type:str, weights_path:str=None, i
                 mlsf.image_backbone.load_darknet_weights(weights_path)    
                 if mlsf.use_lidar_backbone:
                     mlsf.lidar_backbone.load_darknet_weights(weights_path)
-                    
+                        
     if model_type == "mlsf_yolov8":
         """
         TODO, add load model ckpt
@@ -143,20 +149,9 @@ def create_mlsf_yolo(model_kwargs:dict, model_type:str, weights_path:str=None, i
     
     return mlsf
 
-def create_mlsf_ssd(model_kwargs:dict, weights_path:str):
+def create_mlsf_mobilenet(model_kwargs:dict, image_resize:tuple=(416, 416)):
 
-    # mlsf = MLSF(
-    #     config_path=model_kwargs['cfg_file'],
-    #     image_channels=model_kwargs['image_channels'],
-    #     lidar_channels=model_kwargs['lidar_channels'],
-    #     fm_size=model_kwargs['feature_map_size'],
-    #     image_size=tuple(model_kwargs['image_resize']), 
-    #     image_backbone_device=image_backbone_device, 
-    #     lidar_backbone_device=lidar_backbone_device, 
-    #     adaptive_fusion_device=adaptive_fusion_device, 
-    #     detection_depths=model_kwargs['detection_depths']
-    # )
-
+    #TODO, load weights
     image_backbone_device = torch.device(model_kwargs['image_backbone_device']) if torch.cuda.is_available() else torch.device('cpu')
     lidar_backbone_device = torch.device(model_kwargs['lidar_backbone_device']) if torch.cuda.is_available() else torch.device('cpu')
     adaptive_fusion_device = torch.device(model_kwargs['adaptive_fusion_device']) if torch.cuda.is_available() else torch.device('cpu')
@@ -168,30 +163,19 @@ def create_mlsf_ssd(model_kwargs:dict, weights_path:str):
     else:
         torch.manual_seed(model_kwargs['model_seed'])
     
-    mlsf = MLSF(
-        image_size=model_kwargs['image_resize'],
-        detection_depths=model_kwargs['detection_depths'],
-        apply_adaptive_fusion=model_kwargs['apply_adaptive_fusion'],
+    mlsf = MLSFMobilenet(
+        image_resize=image_resize,
+        detection_depths=model_kwargs['detection_depths'],        
         use_lidar_backbone=model_kwargs['use_lidar_backbone'],
+        apply_adaptive_fusion=model_kwargs['apply_adaptive_fusion'],
+        num_fusion_blocks=model_kwargs['num_fusion_blocks'], 
+        fusion_type=model_kwargs['fusion_type'],         
         image_backbone_device=image_backbone_device, 
         lidar_backbone_device=lidar_backbone_device, 
-        adaptive_fusion_device=adaptive_fusion_device,         
+        adaptive_fusion_device=adaptive_fusion_device,  
+        # num_classes=len(Enums.KiTTi_label2Id),
+        num_classes=len(Enums.nuscenes_label2Id)   
     )
-    
-    if os.path.exists(weights_path):
-        mlsf.load_state_dict(
-            torch.load(weights_path)
-        )
-        
-        mlsf.image_backbone.to(mlsf.image_backbone_device)
-        
-        if mlsf.use_lidar_backbone:
-            mlsf.lidar_backbone.to(mlsf.lidar_backbone_device) 
-        
-        if mlsf.apply_adaptive_fusion:
-            mlsf.adaptive_fusion_module.to(mlsf.adaptive_fusion_device)
-        
-        mlsf.ssd_detection_heads.to(mlsf.adaptive_fusion_device)
     
     return mlsf
         
@@ -200,22 +184,22 @@ if __name__ == "__main__":
     trainer_config = json.load(open('config/mlsf_trainer.json'))    
     # darknet53_path = ''
     # weights_pth_path = "training_logs/pretrained_darknet53_rgb_Lidar/yolo_weights_59.pth"
-    
+
     if trainer_config['model_kwargs']['model_type'] == 'mlsf_yolov3' or trainer_config['model_kwargs']['model_type'] == 'mlsf_yolov8':   
         darknet53_path = 'darknet53.conv.74'
         # model_path = 'MLSF-YOLOv8-nano-Attention/ckpt_2/ckpt-model.pt'
         # model_path = 'MLSF-YOLOv3-3D-Bev-(LiDARBackbone-only)-3/ckpt_14/ckpt-model.pt'
-        # model_path = 'results/MLSF-YOLO-Attention-FocalLoss/best-model/best-model.pt'
-        model_path = "MLSF-YOLOv3-JointTraining/best-model_obj_2d/best-model.pt"
-        
-        # model_path = 'yolov3_ckpt_epoch-298.pth'
+        # model_path = 'results/mlsf_yolov3_ckpts_608/MLSF-YOLOv3-Attention-FocalLoss-NewAnchors/best-model_obj_2d/best-model.pt'
+        # model_path = "MLSF-YOLOv3-3D/best-model_obj_3d/best-model.pt"
+
+        model_path = 'MLSF-YOLOv3-NuScenes-numClasses-3/ckpt_9/ckpt-model.pt'
 
         mlsf = create_mlsf_yolo(
             trainer_config['model_kwargs']['mlsf_yolo_kwargs'], 
             trainer_config['model_kwargs']['model_type'],
             model_path, 
             image_resize=tuple(trainer_config['dataset_kwargs']['image_resize'])
-        )
+        )  
 
         trainer = MLSFTrainerYolo(
             mlsf=mlsf, 
@@ -224,17 +208,42 @@ if __name__ == "__main__":
             trainer_kwargs=trainer_config['trainer_kwargs'],
             lr_scheduler_kwargs=trainer_config['lr_scheduler_kwargs']
         )
-        
+
         trainer.train()
+
+    elif trainer_config['model_kwargs']['model_type'] == 'mlsf_mobilenet':   
         
-    elif trainer_config['model_kwargs']['model_type'] == 'mlsf_ssd':   
+        mlsf = create_mlsf_mobilenet(
+            trainer_config['model_kwargs']['mlsf_mobilenet_kwargs'],
+            image_resize=tuple(trainer_config['dataset_kwargs']['image_resize'])
+        )
         
-        weights_path = 'MLSF-SSD-Training/ckpt_14/mlsf_ssd.pth'
-        mlsf = create_mlsf_ssd(
-            trainer_config['model_kwargs']['mlsf_ssd_kwargs'], weights_path
-        )                
-        
-        trainer = MLSFTrainerSSD(
+        # model_path = "MLSF-Mobilenet-608-RGB-BEV/ckpt_14/ckpt-model.pt"
+        model_path = "MLSF-Mobilenet-NuScenes-numClasses-3/best-model_obj_2d-old/best-model.pt"
+
+        if os.path.exists(model_path):
+            mlsf.to('cpu')
+            try:
+                mlsf.load_state_dict(
+                    torch.load(model_path)
+                )
+            except:
+                load_torch_mismatch_weights(
+                    mlsf, model_path, strict_loading=False
+                )
+                
+            mlsf.image_backbone.to(mlsf.image_backbone_device)
+            
+            if mlsf.use_lidar_backbone:
+                mlsf.lidar_backbone.to(mlsf.lidar_backbone_device)
+            
+            if mlsf.apply_adaptive_fusion:
+                mlsf.adaptive_fusion_module.to(mlsf.adaptive_fusion_device)
+            
+            mlsf.detection_heads.to(mlsf.adaptive_fusion_device)
+
+        # trainer = MLSFTrainerSSD(
+        trainer = MLSFTrainerYolo(            
             mlsf=mlsf, 
             dataset_kwargs=trainer_config['dataset_kwargs'],
             optimizer_kwargs=trainer_config['optimizer_kwargs'],
