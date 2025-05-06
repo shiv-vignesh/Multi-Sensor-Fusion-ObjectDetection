@@ -53,6 +53,8 @@ Developed by Shiv Vignesh.
 ### Model Pipeline
 ![Spatial-IL Fusion Pipeline](samples/Proposed-Methodology-Complete.png) -->
 
+[Watch the Demo Video on YouTube](https://www.youtube.com/watch?v=Qny-cG2Rfpw)
+
 ### Detection Outputs
 ![Spatial-IL Fusion Pipeline Detection](samples/000152_detection.png)
 ![Spatial-IL Fusion Pipeline Detection](samples/000181_detection.png)
