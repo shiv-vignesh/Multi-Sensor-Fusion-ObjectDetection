@@ -53,6 +53,8 @@ Developed by Shiv Vignesh.
 ### Model Pipeline
 ![Spatial-IL Fusion Pipeline](samples/Proposed-Methodology-Complete.png) -->
 
+[Watch the Demo Video on YouTube](https://www.youtube.com/watch?v=Qny-cG2Rfpw)
+
 ### Detection Outputs
 ![Spatial-IL Fusion Pipeline Detection](samples/000152_detection.png)
 ![Spatial-IL Fusion Pipeline Detection](samples/000181_detection.png)
@@ -129,7 +131,7 @@ Gating Mechanism (if enabled): Learns optimal weighting of image and LiDAR featu
 1. **Twin-Backbone MLSF-YOLOv3 Fusion**  
    📄 Config: [`config/twin_backbone_trainer.json`](config/mlsf_trainer.json)
 
-1. **Twin-Backbone MLSF-YOLOv3 Fusion**  
+2. **Twin-Backbone MLSF-Mobilenetv2 Fusion**  
    📄 Config: [`config/twin_backbone_trainer.json`](config/mlsf_trainer.json)
 
 
