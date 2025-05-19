@@ -99,7 +99,7 @@ def draw_and_save_output_images(image_detections:list,
         
         plt.figure()
         fig, ax = plt.subplots(1)
-        ax.imshow(image_arr)      
+        ax.imshow(image_arr)
         
         detections = rescale_boxes(detections, resized_image_size, image_arr.shape[:2])
         unique_labels = detections[:, -1].cpu().unique()

@@ -1,4 +1,4 @@
-import os, json
+import os, json, time
 import torch
 import torch.utils
 import torch.utils.data
@@ -13,7 +13,7 @@ from dataset_utils.kitti_2d_objectDetect import Kitti2DObjectDetectDataset, Kitt
 from dataset_utils.nuscenes_2d_objectDetect import NuScenesObjectDetectDataset, NuScenesMLSFCollateFn
 from dataset_utils.enums import Enums
 from dataset_utils.kitti_eda import KiTTiDatasetEDA
-from model.yolo_utils import xywh2xyxy, reshape_outputs, apply_sigmoid_activation, non_max_suppression, rescale_boxes, get_batch_statistics_eval, ap_per_class
+from model.yolo_utils import xywh2xyxy, reshape_outputs, apply_sigmoid_activation, non_max_suppression, rescale_boxes, get_batch_statistics_eval, ap_per_class, compute_stats_per_difficulty
 from test_yolo import draw_and_save_output_images
 
 def compute_detection_stats_per_class(true_positives, false_positives, false_negatives, pred_labels, class_names):
@@ -243,7 +243,9 @@ def test(mlsf:MLSFYolo, dataloader:torch.utils.data.DataLoader, image_resize, ou
     
     labels = []
     sample_metrics = []  # List of tuples (TP, confs, pred)
-    tp_per_level = {'easy': 0, 'moderate': 0, 'hard': 0}
+    tp_per_level = defaultdict(int)
+    
+    time_per_batch = []
     
     if type(mlsf) == MLSFYolo:
         img_size = mlsf.image_backbone.hyperparams['height']
@@ -257,25 +259,30 @@ def test(mlsf:MLSFYolo, dataloader:torch.utils.data.DataLoader, image_resize, ou
             continue
         
         with torch.no_grad():
+            start = time.time()
             loss, _, outputs = mlsf(
                 data_items['images'],
                 data_items['lidar_2d'] if mlsf.use_lidar_backbone else None,
                 data_items['targets']
             )
+            
+            end = time.time()
+            
+            time_per_batch.append(end - start)
         
-        # label_file_path = data_items['label_file_path']
-        
-        # obj_levels = []
-        # for label_fp in label_file_path:
-        #     _, _, _, obj_level = KiTTiDatasetEDA().parse_label_file(label_fp)
-        #     obj_levels.append(obj_levels)
-        
+        if type(dataloader.dataset) == Kitti2DObjectDetectDataset:
+            obj_levels = []
+            label_file_path = data_items['label_file_path']
+            for idx, label_fp in enumerate(label_file_path):
+                _, _, _, obj_level = KiTTiDatasetEDA().parse_label_file(label_fp)
+                for level in obj_level:
+                    obj_levels.append((idx, level))
+
         targets = data_items['targets'].cpu()
         labels += targets[:, 1] #[class_id]   
         
         targets[:, 2:] = xywh2xyxy(targets[:, 2:])
         targets[:, 2:] *= img_size
-        
         outputs = outputs['obj_2d']
 
         if type(mlsf) == MLSFYolo:
@@ -288,14 +295,16 @@ def test(mlsf:MLSFYolo, dataloader:torch.utils.data.DataLoader, image_resize, ou
                 
         sample_metrics += get_batch_statistics_eval(outputs, targets, iou_threshold=0.5)
         
-        # metrics, stats = get_batch_statistics_eval(outputs, targets, iou_threshold=0.5, difficulty_levels=obj_levels)
-        # sample_metrics += metrics
-        
-        # for stat in stats:
-        #     tp_per_level['easy'] += stat['easy']
-        #     tp_per_level['moderate'] += stat['moderate']
-        #     tp_per_level['hard'] += stat['hard']
-        
+        if type(dataloader.dataset) == Kitti2DObjectDetectDataset:
+            tp_stats_per_sample = compute_stats_per_difficulty(
+                outputs, targets, obj_levels, iou_threshold=0.5
+            )
+            
+            for stats in tp_stats_per_sample:
+                for stat in stats:
+                    _, difficulty = stat
+                    tp_per_level[difficulty] += 1
+                
         image_detections.extend(outputs)
         image_paths.extend(data_items['image_paths'])
         
@@ -326,18 +335,23 @@ def test(mlsf:MLSFYolo, dataloader:torch.utils.data.DataLoader, image_resize, ou
     
     with open(f'{output_dir}/detection_stats.json', 'w+') as f:
         json.dump(stats, f)
-        
-    print(tp_per_level)
+    
+    with open(f'{output_dir}/time_per_batch.txt', 'w+') as f:
+        f.write(f'Avg Time: {sum(time_per_batch)/len(time_per_batch)} Total time: {sum(time_per_batch)}')
+    
+    if type(dataloader.dataset) == Kitti2DObjectDetectDataset:
+        with open(f'{output_dir}/tp_per_level.json', 'w+') as f:
+            json.dump(tp_per_level, f)        
     
 
 if __name__ == "__main__":
     
     test_kwargs = {
         "mlsf_yolo_kwargs":{
-            # "image_cfg_file":"config/yolov3-kitti-608.cfg",
-            # "lidar_cfg_file":"config/yolov3-yolo_reduced_classes_3D.cfg",
-            "image_cfg_file":"config/yolov3-nuscenes-608-numClasses-3.cfg",
-            "lidar_cfg_file":"config/yolov3-nuscenes-608-numClasses-3.cfg",            
+            "image_cfg_file":"config/yolov3-kitti-608.cfg",
+            "lidar_cfg_file":"config/yolov3-yolo_reduced_classes_3D.cfg",
+            # "image_cfg_file":"config/yolov3-nuscenes-608-numClasses-3.cfg",
+            # "lidar_cfg_file":"config/yolov3-nuscenes-608-numClasses-3.cfg",            
             "image_channels":3, 
             "lidar_channels":3, 
             "image_backbone_device":"cuda:6",
@@ -381,34 +395,38 @@ if __name__ == "__main__":
             "shuffle":False,
             "batch_size":12,
             "table_blob_paths":[
-                "data/nuscenes/trainval04_blobs_US/tables.json", 
-                "data/nuscenes/trainval08_blobs_US/tables.json"
+                # "data/nuscenes/trainval04_blobs_US/tables.json", 
+                # "data/nuscenes/trainval08_blobs_US/tables.json"
+ 
+                "data/nuscenes/trainval10_blobs_US/tables.json"                
             ],
             "image_resize":[608, 608], 
             "perform_validation":False, 
             "lidar_map_type":"bev_map"                         
         },
-    "output_dir":"eval_stats/MLSF-Yolov3-608-RGB-BEV-NuScenesEval"
+    "output_dir":"eval_stats/MLSF-Mobilenet-608-RGB-BEV-Eval"
     }
     
-    yolo_model_path = "MLSF-YOLOv3-NuScenes-numClasses-3/best-model_obj_2d/best-model.pt"
-    mobilenet_model_path = "results/mlsf_mobilenet/MLSF-Mobilenet-608-RGB/best-model_obj_2d/best-model.pt"
+    # yolo_model_path = "MLSF-YOLOv3-NuScenes-numClasses-3/best-model_obj_2d/best-model.pt"
+    yolo_model_path = "results/mlsf_yolov3_ckpts_608/MLSF-YOLOv3-608-RGB-BEV/best-model_obj_2d/best-model.pt"
+    # mobilenet_model_path = "results/mlsf_mobilenet/MLSF-Mobilenet-608-RGB/best-model_obj_2d/best-model.pt"
+    mobilenet_model_path = "results/mlsf_mobilenet/MLSF-Mobilenet-608-RGB-BEV/best-model_obj_2d/best-model.pt"
     
-    mlsf = load_mlsf_yolo(
-        test_kwargs['mlsf_yolo_kwargs'], yolo_model_path
-    )
-    
-    # mlsf = load_mlsf_mobilenet(
-    #     test_kwargs['mlsf_mobilenet_kwargs'], mobilenet_model_path, test_kwargs['kitti_validation_dataset_kwargs']['image_resize']
+    # mlsf = load_mlsf_yolo(
+    #     test_kwargs['mlsf_yolo_kwargs'], yolo_model_path
     # )
     
-    # dataloader = create_dataloader_kitti(
-    #     test_kwargs['kitti_validation_dataset_kwargs'], lidar_map_type=test_kwargs['kitti_validation_dataset_kwargs']['lidar_map_type']
-    # )
-    
-    dataloader = create_dataloader_nuscenes(
-        test_kwargs['nuscenes_validation_dataset_kwargs'], lidar_map_type=test_kwargs['nuscenes_validation_dataset_kwargs']['lidar_map_type']
+    mlsf = load_mlsf_mobilenet(
+        test_kwargs['mlsf_mobilenet_kwargs'], mobilenet_model_path, test_kwargs['kitti_validation_dataset_kwargs']['image_resize']
     )
+    
+    dataloader = create_dataloader_kitti(
+        test_kwargs['kitti_validation_dataset_kwargs'], lidar_map_type=test_kwargs['kitti_validation_dataset_kwargs']['lidar_map_type']
+    )
+
+    # dataloader = create_dataloader_nuscenes(
+    #     test_kwargs['nuscenes_validation_dataset_kwargs'], lidar_map_type=test_kwargs['nuscenes_validation_dataset_kwargs']['lidar_map_type']
+    # )
     
     # if not os.path.exists(test_kwargs['output_dir']):
     #     os.makedirs(test_kwargs['output_dir'])
@@ -433,6 +451,9 @@ if __name__ == "__main__":
             image_resize=test_kwargs["kitti_validation_dataset_kwargs"]['image_resize'],
             output_dir=output_dir,
             conf_thres=conf,
-            iou_thres=0.45
+            iou_thres=0.45,
+            visualize=False
         )
+        
+        exit(1)
     

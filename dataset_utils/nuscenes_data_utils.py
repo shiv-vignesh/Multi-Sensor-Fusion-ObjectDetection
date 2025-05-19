@@ -299,7 +299,7 @@ if __name__ == "__main__":
                 # '../data/nuscenes/trainval03_blobs_US', 
                 # '../data/nuscenes/trainval04_blobs_US', 
                 # '../data/nuscenes/trainval05_blobs_US', 
-                '../data/nuscenes/trainval06_blobs_US', 
+                '../data/nuscenes/trainval10_blobs_US', 
                 # '../data/nuscenes/trainval07_blobs_US', 
                 # '../data/nuscenes/trainval08_blobs_US'
                 ]
