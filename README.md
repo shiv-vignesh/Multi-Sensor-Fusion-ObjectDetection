@@ -1,6 +1,6 @@
-# Multi-Modal 2D Object Detection
+# Multi-Modal 2D and 3D Object Detection
 
-This project implements a multi-modal 2D object detection system that fuses LiDAR point cloud data with camera images using the KITTI dataset.
+This project implements a multi-modal 2D object detection system that fuses LiDAR point cloud data with camera images using the KITTI and NuScenes dataset.
 
 Developed by Shiv Vignesh. 
 
