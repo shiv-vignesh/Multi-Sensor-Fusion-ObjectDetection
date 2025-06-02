@@ -330,7 +330,7 @@ class MLSFYolo(torch.nn.Module):
                 fused_features_list, images.shape[2] if images is not None else lidar_2d.shape[2]
             )
 
-            if targets is not None:
+            if targets is not None:                
                 if not self.training:
                     num_anchors = 3
                     for i, x in enumerate(outputs):
@@ -365,7 +365,7 @@ class MLSFYolo(torch.nn.Module):
 
             else:
                 if not self.training:
-                    num_anchors = 3            
+                    num_anchors = 3                    
                     for i, x in enumerate(outputs):
                         bs, num_preds, _ = x.shape
                         grid_size = int(math.sqrt(num_preds // num_anchors))

@@ -224,8 +224,8 @@ def load_mlsf_yolo(model_kwargs:dict, weights_path:str):
             mlsf.lidar_backbone.to(mlsf.lidar_backbone_device)
         
         if mlsf.apply_adaptive_fusion:
-            mlsf.adaptive_fusion_module.to(mlsf.adaptive_fusion_device)        
-        
+            mlsf.adaptive_fusion_module.to(mlsf.adaptive_fusion_device)
+
         return mlsf
     
     else:
@@ -251,8 +251,7 @@ def test(mlsf:MLSFYolo, dataloader:torch.utils.data.DataLoader, image_resize, ou
         img_size = mlsf.image_backbone.hyperparams['height']
     elif type(mlsf) == MLSFMobilenet:
         img_size = mlsf.image_height
-        
-    
+
     for batch_idx, data_items in enumerate(test_iter):
 
         if not torch.is_tensor(data_items['targets']) or data_items['targets'].numel() == 0:
